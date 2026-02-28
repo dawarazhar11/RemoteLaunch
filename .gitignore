@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+._*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Config (contains credentials)
+.remote-launch/
+
+# Archive and extracted duplicate
+remote-launch.zip
+remote-launch/
+
+# IDE
+.vscode/
+.idea/
