@@ -184,9 +184,11 @@ AGENT_PORT="{agent_port}"
 WIN_APP_PATH="{win_path}"
 APP_NAME="{app_name}"
 
-# ── Find FreeRDP ──
+mkdir -p "$HOME/.remote-launch"
+
+# ── Find FreeRDP (prefer SDL build — no X11/XQuartz needed) ──
 FREERDP=""
-for cmd in xfreerdp3 xfreerdp /opt/homebrew/bin/xfreerdp3 /opt/homebrew/bin/xfreerdp; do
+for cmd in sdl-freerdp /opt/homebrew/bin/sdl-freerdp xfreerdp3 xfreerdp /opt/homebrew/bin/xfreerdp3 /opt/homebrew/bin/xfreerdp; do
     if command -v "$cmd" &>/dev/null; then
         FREERDP="$cmd"
         break
@@ -194,25 +196,25 @@ for cmd in xfreerdp3 xfreerdp /opt/homebrew/bin/xfreerdp3 /opt/homebrew/bin/xfre
 done
 
 if [ -z "$FREERDP" ]; then
-    osascript -e 'display dialog "FreeRDP not found!\\n\\nInstall with:\\nbrew install freerdp3" with title "RemoteLaunch" buttons {{"OK"}} with icon stop'
+    osascript -e 'display dialog "FreeRDP not found!\\n\\nInstall with:\\nbrew install freerdp" with title "RemoteLaunch" buttons {{"OK"}} with icon stop'
     exit 1
 fi
 
 IS_V3=0
-if echo "$FREERDP" | grep -q "freerdp3"; then
+FREERDP_VER=$("$FREERDP" --version 2>&1 || true)
+if echo "$FREERDP" | grep -qE "freerdp3|sdl-freerdp"; then
+    IS_V3=1
+elif echo "$FREERDP_VER" | grep -qE "version 3\\."; then
     IS_V3=1
 fi
 
 # ── Handle file argument (Open With / drag & drop) ──
-FILE_ARG=""
 WIN_FILE_PATH=""
 
 if [ -n "$1" ] && [ -f "$1" ]; then
     LOCAL_FILE="$1"
     FILENAME=$(basename "$LOCAL_FILE")
 
-    # Upload file to Windows agent
-    echo "Uploading $FILENAME to Windows..."
     UPLOAD_RESULT=$(curl -s -X POST \\
         -H "X-Filename: $FILENAME" \\
         -H "Content-Type: application/octet-stream" \\
@@ -236,11 +238,10 @@ CMD+=("/u:$USER")
 [ -n "$PASS" ] && CMD+=("/p:$PASS")
 [ -n "$DOMAIN" ] && CMD+=("/d:$DOMAIN")
 
-# RemoteApp mode
+# RemoteApp mode — each app gets its own seamless window
 if [ -n "$WIN_FILE_PATH" ]; then
-    # Launch app with file argument
     if [ "$IS_V3" -eq 1 ]; then
-        CMD+=("/app:program:$WIN_APP_PATH" "/app:cmd:$WIN_FILE_PATH")
+        CMD+=("/app:program:$WIN_APP_PATH,cmd:$WIN_FILE_PATH")
     else
         CMD+=("/app:$WIN_APP_PATH" "/app-cmd:$WIN_FILE_PATH")
     fi
@@ -252,21 +253,26 @@ else
     fi
 fi
 
-# ── Latency-optimized flags (Parsec-like) ──
-CMD+=("/network:lan")
-CMD+=("/gfx:RFX")
-CMD+=("+gfx-progressive")
-CMD+=("/dynamic-resolution")
-CMD+=("+clipboard")
-CMD+=("+home-drive")
-CMD+=("/audio-mode:0")
-CMD+=("/compression-level:2")
+# ── Latency-optimized flags ──
+if [ "$IS_V3" -eq 1 ]; then
+    CMD+=("/network:lan")
+    CMD+=("+clipboard")
+    CMD+=("+home-drive")
+    CMD+=("/audio-mode:0")
+    CMD+=("/compression-level:2")
+    CMD+=("/ipv4")
+else
+    CMD+=("/network:lan")
+    CMD+=("/gfx:RFX")
+    CMD+=("+gfx-progressive")
+    CMD+=("/dynamic-resolution")
+    CMD+=("+clipboard")
+    CMD+=("+home-drive")
+    CMD+=("/audio-mode:0")
+    CMD+=("/compression-level:2")
+fi
 
-# Extra user flags
-{extra}
-for flag in {extra}; do
-    CMD+=("$flag")
-done
+CMD+=("{extra}")
 
 # ── Launch ──
 exec "${{CMD[@]}}" 2>>"$HOME/.remote-launch/launch.log"

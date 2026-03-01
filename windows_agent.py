@@ -352,6 +352,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             apps = cache.get(True)
             self._json({"status": "ok", "count": len(apps)})
 
+        elif p.path == "/api/enable-remoteapp":
+            ok = enable_remoteapp()
+            self._json({"status": "ok" if ok else "error",
+                         "message": "RemoteApp allowlist disabled" if ok else "Failed — run agent as Admin"})
+
         elif p.path.startswith("/api/download/"):
             # Download a file from upload dir
             fname = p.path.split("/api/download/", 1)[1]
@@ -369,7 +374,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json({
                 "service": "RemoteLaunch Agent v2",
                 "endpoints": ["/api/apps", "/api/status", "/api/refresh",
-                              "POST /api/upload", "/api/download/<filename>"]
+                              "POST /api/upload", "POST /api/launch",
+                              "/api/download/<filename>"]
             })
 
     def do_POST(self):
@@ -416,6 +422,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
             self._json({"error": "No file provided"}, 400)
+
+        elif self.path == "/api/launch":
+            # Launch an app on Windows (called from Mac launcher)
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length) if content_length > 0 else b"{}"
+            try:
+                data = json.loads(body.decode())
+            except:
+                self._json({"error": "Invalid JSON"}, 400)
+                return
+            app_path = data.get("path", "")
+            file_arg = data.get("file", "")
+            if not app_path:
+                self._json({"error": "Missing 'path'"}, 400)
+                return
+            if not os.path.isfile(app_path):
+                self._json({"error": f"App not found: {app_path}"}, 404)
+                return
+            try:
+                cmd = [app_path]
+                if file_arg:
+                    cmd.append(file_arg)
+                subprocess.Popen(cmd, shell=False,
+                                 creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+                self._json({"status": "ok", "launched": app_path, "file": file_arg})
+            except Exception as e:
+                self._json({"error": str(e)}, 500)
+
         else:
             self._json({"error": "Not found"}, 404)
 
@@ -427,10 +461,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 
+def enable_remoteapp():
+    """Enable RemoteApp for all apps on Windows Pro by disabling the allowlist check."""
+    try:
+        key_path = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Terminal Server\TSAppAllowList"
+        key = winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, key_path)
+        winreg.SetValueEx(key, "fDisabledAllowList", 0, winreg.REG_DWORD, 1)
+        winreg.CloseKey(key)
+        return True
+    except Exception as e:
+        print(f"[Agent] Warning: Could not enable RemoteApp allowlist: {e}")
+        print(f"[Agent] Try running the agent as Administrator")
+        return False
+
+
 if __name__ == "__main__":
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[Agent] RemoteLaunch Agent v2.0")
     print(f"[Agent] Upload dir: {UPLOAD_DIR}")
+    if enable_remoteapp():
+        print(f"[Agent] RemoteApp allowlist disabled (all apps allowed)")
     cache.get(True)
     server = http.server.HTTPServer(("0.0.0.0", AGENT_PORT), Handler)
     print(f"[Agent] Listening on http://0.0.0.0:{AGENT_PORT}")
