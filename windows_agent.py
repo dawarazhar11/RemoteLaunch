@@ -22,7 +22,10 @@ import shutil
 import tempfile
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
-import cgi
+try:
+    import cgi
+except ImportError:
+    cgi = None  # Removed in Python 3.13+
 
 AGENT_PORT = 7891
 UPLOAD_DIR = Path.home() / ".remote-launch" / "uploads"
@@ -286,6 +289,36 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
 
+    def _parse_multipart(self, content_type, content_length):
+        """Parse multipart/form-data without the deprecated cgi module."""
+        if cgi is not None:
+            form = cgi.FieldStorage(
+                fp=self.rfile, headers=self.headers,
+                environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": content_type})
+            file_item = form["file"]
+            if file_item.filename:
+                return (file_item.filename, file_item.file.read())
+            return None
+        # Manual parsing for Python 3.13+
+        body = self.rfile.read(content_length)
+        boundary = content_type.split("boundary=")[-1].strip().encode()
+        parts = body.split(b"--" + boundary)
+        for part in parts:
+            if b"Content-Disposition" not in part:
+                continue
+            header_end = part.find(b"\r\n\r\n")
+            if header_end == -1:
+                continue
+            header_section = part[:header_end].decode(errors="replace")
+            data = part[header_end + 4:]
+            if data.endswith(b"\r\n"):
+                data = data[:-2]
+            if 'name="file"' in header_section or "filename=" in header_section:
+                fn_match = re.search(r'filename="([^"]+)"', header_section)
+                if fn_match:
+                    return (fn_match.group(1), data)
+        return None
+
     def do_GET(self):
         p = urlparse(self.path)
         q = parse_qs(p.query)
@@ -346,17 +379,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             content_length = int(self.headers.get("Content-Length", 0))
 
             if "multipart/form-data" in content_type:
-                form = cgi.FieldStorage(
-                    fp=self.rfile, headers=self.headers,
-                    environ={"REQUEST_METHOD": "POST",
-                             "CONTENT_TYPE": content_type})
-                file_item = form["file"]
-                if file_item.filename:
+                parsed = self._parse_multipart(content_type, content_length)
+                if parsed:
+                    filename, data = parsed
                     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-                    safe_name = os.path.basename(file_item.filename)
+                    safe_name = os.path.basename(filename)
                     dest = UPLOAD_DIR / safe_name
                     with open(dest, "wb") as f:
-                        f.write(file_item.file.read())
+                        f.write(data)
                     self._json({
                         "status": "ok",
                         "filename": safe_name,
