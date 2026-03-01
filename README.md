@@ -131,39 +131,60 @@ Word.exe opens report.docx in seamless window on Mac
 | `generate_apps.py` | Mac | Creates .app bundles with file associations |
 | `setup_mac.sh` | Mac | Full Mac setup (FreeRDP + config + generate) |
 
+## Xpra Mode (Per-App Windows)
+
+Xpra forwards **individual Windows app windows** to your Mac — each app appears as its own native macOS window. No full desktop, no session conflicts. This is the recommended mode.
+
+### Windows — one-line Xpra server start (PowerShell Admin)
+
+```powershell
+xpra shadow --bind-tcp=0.0.0.0:10000
+```
+
+To also open firewall for port 10000:
+```powershell
+New-NetFirewallRule -DisplayName "Xpra" -Direction Inbound -Protocol TCP -LocalPort 10000 -Action Allow; xpra shadow --bind-tcp=0.0.0.0:10000
+```
+
+### Mac — connect to Xpra server
+
+```bash
+brew install --cask xpra
+xpra attach tcp://NETBIRD_IP:10000
+```
+
+Each Windows app window appears as a separate macOS window with clipboard, audio, and file transfer built-in.
+
+### Xpra vs RDP vs Parsec
+
+| Protocol | Per-App Windows | Latency | Clipboard/Audio |
+|----------|:-:|:-:|:-:|
+| **Xpra (NVENC)** | Yes | ~15-25ms | Built-in |
+| **Parsec** | No (full desktop) | ~5-15ms | Yes |
+| **Sunshine/Moonlight** | No (full desktop) | ~5-15ms | Limited |
+| **FreeRDP RemoteApp** | Unreliable on Win Pro | ~15-30ms | Yes |
+
+### Hybrid approach
+
+Use both:
+- **Xpra** for productivity apps (Word, Excel, VS Code, ANSYS) — per-app windows, Spotlight
+- **Parsec/Sunshine** for latency-critical stuff (media editing, gaming) — hardware encoding
+
 ## Latency Optimization
 
-The launcher scripts use these FreeRDP flags for minimum latency:
+The FreeRDP launcher scripts use these flags for minimum latency:
 
 | Flag | Purpose |
 |------|---------|
 | `/network:lan` | Optimizes for LAN — disables WAN throttling |
-| `/gfx:RFX` | RemoteFX codec — lowest latency for LAN |
-| `+gfx-progressive` | Progressive rendering — faster initial draw |
+| `/gfx:RFX:on` | RemoteFX codec — lowest latency for LAN |
 | `/compression-level:2` | Light compression — faster than heavy |
-| `/dynamic-resolution` | Match Mac display resolution |
-| `+clipboard` | Shared clipboard between Mac ↔ Windows |
+| `+dynamic-resolution` | Match Mac display resolution |
+| `+clipboard` | Shared clipboard between Mac and Windows |
 | `+home-drive` | Maps Mac home folder to Windows |
 | `/audio-mode:0` | Local audio playback |
 | `/cert:ignore` | Skip certificate prompts |
-
-### FreeRDP vs Parsec latency
-
-On a LAN or Netbird mesh:
-- **Parsec**: ~5-15ms (proprietary hardware encoder, UDP)
-- **FreeRDP with RFX+LAN**: ~15-30ms (TCP-based RDP)
-- **FreeRDP with AVC444**: ~20-40ms (H.264, higher quality but more latency)
-
-For the lowest possible latency:
-1. Use **RFX** codec (default in our config) — it's faster than AVC444 on LAN
-2. Ensure both machines are on the **same Netbird subnet**
-3. If you need even lower latency for gaming/video, use **Parsec alongside** for those specific apps
-
-### Hybrid approach: Parsec + RemoteLaunch
-
-You can use both:
-- **RemoteLaunch** for productivity apps (Word, Excel, VS Code, ANSYS) — file associations, Spotlight
-- **Parsec** for latency-critical stuff (media editing, gaming) — hardware encoding
+| `/ipv4` | Force IPv4 (fixes Netbird routing) |
 
 ## Re-syncing Apps
 
@@ -190,6 +211,8 @@ python3 generate_apps.py --clean
 | `/api/apps?refresh` | GET | Force rescan |
 | `/api/status` | GET | Agent health check |
 | `/api/upload` | POST | Upload file from Mac |
+| `/api/launch` | POST | Launch an app on Windows `{"path":"...","file":"..."}` |
+| `/api/enable-remoteapp` | GET | Enable RemoteApp allowlist bypass |
 | `/api/download/<file>` | GET | Download file back |
 
 ## Running Agent as Windows Service
@@ -234,6 +257,8 @@ curl http://NETBIRD_IP:7891/api/status
 
 ## Requirements
 
-- **macOS 12+** with Python 3.8+, Homebrew, FreeRDP
-- **Windows Pro/Enterprise** with Python 3.8+, RDP enabled
+- **macOS 12+** with Python 3.8+, Homebrew
+- **Windows Pro/Enterprise** with Python 3.8+
 - **Netbird** connected on both machines
+- **For RDP mode**: FreeRDP (`brew install freerdp`), RDP enabled on Windows
+- **For Xpra mode** (recommended): Xpra on both machines (`brew install --cask xpra` / MSI from [xpra.org](https://xpra.org/dists/windows/))
